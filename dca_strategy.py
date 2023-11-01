@@ -39,7 +39,7 @@ class DCAStrategy(BaseStrategy):
     # Check the documentation or the Sample strategy to get the latest version.
     INTERFACE_VERSION = 3
 
-    STRATEGY_VERSION = "1.0.0"
+    STRATEGY_VERSION = "1.2.0"
 
     # Max number of safety orders (-1 means disabled)
     max_entry_position_adjustment = -1
@@ -72,8 +72,13 @@ class DCAStrategy(BaseStrategy):
     trailing_safety_order_configuration["default"][0]["start_percentage"] = 0.25
     trailing_safety_order_configuration["default"][0]["factor"] = 0.50
 
-    # Create custom dictionary for storing run-time data
-    custom_info = {}
+
+    def version(self) -> Optional[str]:
+        """
+        Returns version of the strategy.
+        """
+
+        return self.STRATEGY_VERSION
 
 
     def __init__(self, config: Config) -> None:
@@ -199,43 +204,7 @@ class DCAStrategy(BaseStrategy):
                 )
                 return False
 
-        self.create_custom_data(pairkey)
-
-        return True
-
-
-    def confirm_trade_exit(self, pair: str, trade: 'Trade', order_type: str, amount: float,
-                           rate: float, time_in_force: str, exit_reason: str,
-                           current_time: datetime, **kwargs) -> bool:
-        """
-        Called right before placing a regular exit order.
-        Timing for this function is critical, so avoid doing heavy computations or
-        network requests in this method.
-
-        For full documentation please go to https://www.freqtrade.io/en/latest/strategy-advanced/
-
-        When not implemented by a strategy, returns True (always confirming).
-
-        :param pair: Pair for trade that's about to be exited.
-        :param trade: trade object.
-        :param order_type: Order type (as configured in order_types). usually limit or market.
-        :param amount: Amount in base currency.
-        :param rate: Rate that's going to be used when using limit orders
-                     or current rate for market orders.
-        :param time_in_force: Time in force. Defaults to GTC (Good-til-cancelled).
-        :param exit_reason: Exit reason.
-            Can be any of ['roi', 'stop_loss', 'stoploss_on_exchange', 'trailing_stop_loss',
-                           'exit_signal', 'force_exit', 'emergency_exit']
-        :param current_time: datetime object, containing the current datetime
-        :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
-        :return bool: When True, then the exit-order is placed on the exchange.
-            False aborts the process
-        """
-
-        pairkey = f"{pair}_{trade.trade_direction}"
-        if pairkey in self.custom_info:
-            # Remove entry and data for this trade
-            del self.custom_info[pairkey]
+        self.initialize_custom_data(pairkey)
 
         return True
 
@@ -249,7 +218,7 @@ class DCAStrategy(BaseStrategy):
         """
         Custom trade adjustment logic, returning the stake amount that a trade should be
         increased or decreased.
-        This means extra buy or sell orders with additional fees.
+        This means extra entry or exit orders with additional fees.
         Only called when `position_adjustment_enable` is set to True.
 
         For full documentation please go to https://www.freqtrade.io/en/latest/strategy-advanced/
@@ -258,8 +227,9 @@ class DCAStrategy(BaseStrategy):
 
         :param trade: trade object.
         :param current_time: datetime object, containing the current datetime
-        :param current_rate: Current buy rate.
-        :param current_profit: Current profit (as ratio), calculated based on current_rate.
+        :param current_rate: Current entry rate (same as current_entry_profit)
+        :param current_profit: Current profit (as ratio), calculated based on current_rate
+                               (same as current_entry_profit).
         :param min_stake: Minimal stake size allowed by exchange (for both entries and exits)
         :param max_stake: Maximum stake allowed (either through balance, or by exchange limits).
         :param current_entry_rate: Current rate using entry pricing.
@@ -293,9 +263,6 @@ class DCAStrategy(BaseStrategy):
         current_entry_profit_percentage = (current_entry_profit / trade.leverage) * 100.0
         if current_entry_profit_percentage > next_price_deviation:
             return None
-
-        # Setup custom data (should already exist, but to be sure)
-        self.create_custom_data(pairkey)
 
         tso_enabled, tso_start_percentage, tso_factor = self.get_trailing_config(current_entry_profit_percentage, next_price_deviation, pairkey)
 
@@ -497,18 +464,12 @@ class DCAStrategy(BaseStrategy):
         return total_deviation
 
 
-    def create_custom_data(self, pair_key):
-        """"""
+    def initialize_custom_data(self, pair_key):
+        """
+        """
 
-        if not pair_key in self.custom_info:
-            # Create empty entry for this trade
-            self.custom_info[pair_key] = {}
+        super().create_custom_data(pair_key)
 
-            # Insert default data
-            self.custom_info[pair_key]["last_profit_percentage"] = float(0.0)
-            self.custom_info[pair_key]["add_safety_order_on_profit_percentage"] = float(0.0)
-
-            if self.logger:
-                self.logger.debug(
-                    f"Created custom data storage for trade of pair {pair_key}."
-                )
+        # Insert default data
+        self.custom_info[pair_key]["last_profit_percentage"] = float(0.0)
+        self.custom_info[pair_key]["add_safety_order_on_profit_percentage"] = float(0.0)

@@ -54,7 +54,7 @@ class BaseStrategy(IStrategy):
     # Check the documentation or the Sample strategy to get the latest version.
     INTERFACE_VERSION = 3
 
-    STRATEGY_VERSION = "1.0.1"
+    STRATEGY_VERSION = "1.2.2"
 
     # Optimal timeframe for the strategy.
     timeframe = '1h'
@@ -94,6 +94,17 @@ class BaseStrategy(IStrategy):
 
     # Leverage configuration
     leverage_configuration = {}
+
+    # Create custom dictionary for storing run-time data
+    custom_info = {}
+
+
+    def version(self) -> Optional[str]:
+        """
+        Returns version of the strategy.
+        """
+
+        return self.STRATEGY_VERSION
 
 
     def __init__(self, config: Config) -> None:
@@ -164,6 +175,9 @@ class BaseStrategy(IStrategy):
         :return: DataFrame with entry columns populated
         """
 
+        dataframe.loc[:,'enter_long'] = 0
+        dataframe.loc[:,'enter_short'] = 0
+
         return dataframe
 
 
@@ -175,7 +189,46 @@ class BaseStrategy(IStrategy):
         :return: DataFrame with exit columns populated
         """
 
+        dataframe.loc[:,'exit_long'] = 0
+        dataframe.loc[:,'exit_short'] = 0
+
         return dataframe
+
+
+    def confirm_trade_exit(self, pair: str, trade: 'Trade', order_type: str, amount: float,
+                           rate: float, time_in_force: str, exit_reason: str,
+                           current_time: datetime, **kwargs) -> bool:
+        """
+        Called right before placing a regular exit order.
+        Timing for this function is critical, so avoid doing heavy computations or
+        network requests in this method.
+
+        For full documentation please go to https://www.freqtrade.io/en/latest/strategy-advanced/
+
+        When not implemented by a strategy, returns True (always confirming).
+
+        :param pair: Pair for trade that's about to be exited.
+        :param trade: trade object.
+        :param order_type: Order type (as configured in order_types). usually limit or market.
+        :param amount: Amount in base currency.
+        :param rate: Rate that's going to be used when using limit orders
+                     or current rate for market orders.
+        :param time_in_force: Time in force. Defaults to GTC (Good-til-cancelled).
+        :param exit_reason: Exit reason.
+            Can be any of ['roi', 'stop_loss', 'stoploss_on_exchange', 'trailing_stop_loss',
+                           'exit_signal', 'force_exit', 'emergency_exit']
+        :param current_time: datetime object, containing the current datetime
+        :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
+        :return bool: When True, then the exit-order is placed on the exchange.
+            False aborts the process
+        """
+
+        pairkey = f"{pair}_{trade.trade_direction}"
+        if pairkey in self.custom_info:
+            # Remove entry and data for this trade
+            del self.custom_info[pairkey]
+
+        return True
 
 
     def leverage(self, pair: str, current_time: datetime, current_rate: float,
@@ -201,8 +254,8 @@ class BaseStrategy(IStrategy):
             return 1.0
 
 
-    def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime,
-                        current_rate: float, current_profit: float, **kwargs) -> float:
+    def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime, current_rate: float,
+                        current_profit: float, after_fill: bool, **kwargs) -> Optional[float]:
         """
         Custom stoploss logic, returning the new distance relative to current_rate (as ratio).
         e.g. returning -0.05 would create a stoploss 5% below current_rate.
@@ -218,6 +271,7 @@ class BaseStrategy(IStrategy):
         :param current_time: datetime object, containing the current datetime
         :param current_rate: Rate, calculated based on pricing settings in exit_pricing.
         :param current_profit: Current profit (as ratio), calculated based on current_rate.
+        :param after_fill: True if the stoploss is called after the order was filled.
         :param **kwargs: Ensure to keep this here so updates to this won't break your strategy.
         :return float: New stoploss value, relative to the current rate
         """
@@ -229,3 +283,18 @@ class BaseStrategy(IStrategy):
             sl = self.stoploss_configuration[pairkey] * self.leverage_configuration[pairkey]
 
         return sl
+
+
+    def create_custom_data(self, pair_key):
+        """
+        Create the custom data contact for storage during the runtime of this bot.
+        """
+
+        if not pair_key in self.custom_info:
+            # Create empty entry for this trade
+            self.custom_info[pair_key] = {}
+
+            if self.logger:
+                self.logger.debug(
+                    f"Created custom data storage for trade of pair {pair_key}."
+                )
